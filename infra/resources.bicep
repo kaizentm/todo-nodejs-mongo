@@ -5,67 +5,42 @@ param tags object
 
 var abbrs = loadJsonContent('abbreviations.json')
 
-resource web 'Microsoft.Web/sites@2021-03-01' = {
-  name: '${abbrs.webSitesAppService}web-${resourceToken}'
+resource web 'Microsoft.Web/staticSites@2021-03-01' = {
+  name: '${abbrs.webStaticSites}${resourceToken}'
   location: location
   tags: union(tags, { 'azd-service-name': 'web' })
-  kind: 'app,linux'
+  sku: {
+    name: 'Free'
+    tier: 'Free'
+  }
   properties: {
-    serverFarmId: appServicePlan.id
-    siteConfig: {
-      linuxFxVersion: 'NODE|16-lts'
-      alwaysOn: true
-      ftpsState: 'FtpsOnly'
-      appCommandLine: 'pm2 serve /home/site/wwwroot --no-daemon --spa'
-    }
-    httpsOnly: true
-  }
-
-  resource appSettings 'config' = {
-    name: 'appsettings'
-    properties: {
-      SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
-      APPLICATIONINSIGHTS_CONNECTION_STRING: applicationInsightsResources.outputs.APPLICATIONINSIGHTS_CONNECTION_STRING
-    }
-  }
-
-  resource logs 'config' = {
-    name: 'logs'
-    properties: {
-      applicationLogs: {
-        fileSystem: {
-          level: 'Verbose'
-        }
-      }
-      detailedErrorMessages: {
-        enabled: true
-      }
-      failedRequestsTracing: {
-        enabled: true
-      }
-      httpLogs: {
-        fileSystem: {
-          enabled: true
-          retentionInDays: 1
-          retentionInMb: 35
-        }
-      }
-    }
+    provider: 'Custom'
   }
 }
 
 resource api 'Microsoft.Web/sites@2021-03-01' = {
-  name: '${abbrs.webSitesAppService}api-${resourceToken}'
+  name: '${abbrs.webSitesFunctions}api-${resourceToken}'
   location: location
   tags: union(tags, { 'azd-service-name': 'api' })
-  kind: 'app,linux'
+  kind: 'functionapp,linux'
   properties: {
     serverFarmId: appServicePlan.id
     siteConfig: {
-      alwaysOn: true
-      linuxFxVersion: 'NODE|16-lts'
+      numberOfWorkers: 1
+      linuxFxVersion: 'NODE|16'
+      alwaysOn: false
+      functionAppScaleLimit: 200
+      minimumElasticInstanceCount: 0
       ftpsState: 'FtpsOnly'
+      use32BitWorkerProcess: false
+      cors: {
+        allowedOrigins: [
+          'https://ms.portal.azure.com'
+          'https://${web.properties.defaultHostname}'
+        ]
+      }
     }
+    clientAffinityEnabled: false
     httpsOnly: true
   }
 
@@ -76,11 +51,14 @@ resource api 'Microsoft.Web/sites@2021-03-01' = {
   resource appSettings 'config' = {
     name: 'appsettings'
     properties: {
+      APPLICATIONINSIGHTS_CONNECTION_STRING: applicationInsightsResources.outputs.APPLICATIONINSIGHTS_CONNECTION_STRING
+      AzureWebJobsStorage: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storage.listKeys().keys[0].value}'
+      FUNCTIONS_EXTENSION_VERSION: '~4'
+      FUNCTIONS_WORKER_RUNTIME: 'node'
+      SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
       AZURE_COSMOS_CONNECTION_STRING_KEY: 'AZURE-COSMOS-CONNECTION-STRING'
       AZURE_COSMOS_DATABASE_NAME: cosmos::database.name
-      SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
       AZURE_KEY_VAULT_ENDPOINT: keyVault.properties.vaultUri
-      APPLICATIONINSIGHTS_CONNECTION_STRING: applicationInsightsResources.outputs.APPLICATIONINSIGHTS_CONNECTION_STRING
     }
   }
 
@@ -114,8 +92,12 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2021-03-01' = {
   location: location
   tags: tags
   sku: {
-    name: 'B1'
+    name: 'Y1'
+    tier: 'Dynamic'
+    size: 'Y1'
+    family: 'Y'
   }
+  kind: 'functionapp'
   properties: {
     reserved: true
   }
@@ -186,6 +168,24 @@ module applicationInsightsResources 'applicationinsights.bicep' = {
     location: location
     tags: tags
     workspaceId: logAnalyticsWorkspace.id
+  }
+}
+
+resource storage 'Microsoft.Storage/storageAccounts@2021-09-01' = {
+  name: '${abbrs.storageStorageAccounts}${resourceToken}'
+  location: location
+  tags: tags
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+    }
   }
 }
 
@@ -274,5 +274,5 @@ output AZURE_COSMOS_CONNECTION_STRING_KEY string = 'AZURE-COSMOS-CONNECTION-STRI
 output AZURE_COSMOS_DATABASE_NAME string = cosmos::database.name
 output AZURE_KEY_VAULT_ENDPOINT string = keyVault.properties.vaultUri
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = applicationInsightsResources.outputs.APPLICATIONINSIGHTS_CONNECTION_STRING
-output WEB_URI string = 'https://${web.properties.defaultHostName}'
+output WEB_URI string = 'https://${web.properties.defaultHostname}'
 output API_URI string = 'https://${api.properties.defaultHostName}'
